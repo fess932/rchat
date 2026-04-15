@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rchat</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --bg: #09090f; --surface: #111120; --card: #1a1a2e; --border: #252540; }
+    body { background: var(--bg); }
+
+    #video-grid { display: grid; gap: 12px; height: 100%; }
+
+    .vtile { position: relative; border-radius: 16px; overflow: hidden;
+             background: var(--card); border: 1px solid var(--border); min-height: 180px; }
+    .vtile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .vtile .badge { position: absolute; bottom: 10px; left: 10px; padding: 3px 10px;
+                    border-radius: 8px; font-size: 12px; font-weight: 500;
+                    background: rgba(0,0,0,.6); color: #d4d4e8;
+                    backdrop-filter: blur(6px); z-index: 10; }
+    .vtile .no-cam { position: absolute; inset: 0; display: flex;
+                     align-items: center; justify-content: center;
+                     background: var(--card); z-index: 5; }
+
+    .ctrl { width: 52px; height: 52px; border-radius: 50%; display: flex;
+            align-items: center; justify-content: center; cursor: pointer;
+            transition: transform .15s, opacity .15s; border: none; outline: none; }
+    .ctrl:hover { transform: scale(1.08); }
+    .ctrl:active { transform: scale(0.95); }
+    .ctrl.off { background: #5a1414 !important; }
+
+    @keyframes pop { from { opacity:0; transform: scale(.92); } to { opacity:1; transform: scale(1); } }
+    .pop { animation: pop .25s ease-out; }
+
+    #toast { position: fixed; bottom: 88px; left: 50%; transform: translateX(-50%);
+             padding: 7px 16px; border-radius: 10px; font-size: 13px; font-weight: 500;
+             background: #252540; color: #c8c8e0; opacity: 0;
+             transition: opacity .25s; pointer-events: none; z-index: 999; white-space: nowrap; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col text-white select-none">
+
+<!-- ═══════════════ HOME PAGE ═══════════════ -->
+<div id="pg-home" class="flex-1 flex items-center justify-center p-6">
+  <div class="w-full max-w-sm">
+
+    <!-- Logo -->
+    <div class="flex items-center gap-3 mb-10 justify-center">
+      <div class="w-11 h-11 rounded-2xl bg-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+        <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <h1 class="text-3xl font-bold tracking-tight">rchat</h1>
+    </div>
+
+    <!-- Card -->
+    <div class="rounded-2xl p-7" style="background:var(--surface);border:1px solid var(--border)">
+      <button id="create-btn" onclick="createRoom()"
+        class="w-full py-3.5 rounded-xl text-white font-semibold text-base transition-opacity hover:opacity-90 active:scale-95"
+        style="background: linear-gradient(135deg,#6366f1,#8b5cf6); box-shadow: 0 4px 20px rgba(99,102,241,.35)">
+        Create Room
+      </button>
+
+      <div class="flex items-center gap-3 my-5">
+        <div class="flex-1 h-px" style="background:var(--border)"></div>
+        <span class="text-xs" style="color:#555570">or enter room link</span>
+        <div class="flex-1 h-px" style="background:var(--border)"></div>
+      </div>
+
+      <div class="flex gap-2">
+        <input id="room-input" type="text" placeholder="Room ID…"
+          class="flex-1 px-4 py-3 rounded-xl text-sm text-white placeholder-gray-600 outline-none focus:ring-2 focus:ring-indigo-500/60"
+          style="background:var(--bg);border:1px solid var(--border)"
+          onkeydown="if(event.key==='Enter') joinFromInput()">
+        <button onclick="joinFromInput()"
+          class="px-5 py-3 rounded-xl text-sm font-semibold transition-opacity hover:opacity-80"
+          style="background:var(--border);color:#c8c8e0">
+          Join
+        </button>
+      </div>
+    </div>
+
+    <p class="text-center mt-5 text-xs" style="color:#444460">Peer-to-peer · No accounts · No recordings</p>
+  </div>
+</div>
+
+<!-- ═══════════════ ROOM PAGE ═══════════════ -->
+<div id="pg-room" class="hidden flex-col" style="height:100svh">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between px-4 py-2.5 shrink-0"
+       style="background:var(--surface);border-bottom:1px solid var(--border)">
+    <div class="flex items-center gap-2.5">
+      <div class="w-7 h-7 rounded-lg bg-indigo-500 flex items-center justify-center">
+        <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <span class="font-semibold text-sm">rchat</span>
+      <span style="color:#333350">·</span>
+      <span id="hdr-room-id" class="font-mono text-xs" style="color:#7070a0"></span>
+    </div>
+
+    <button id="copy-link-btn" onclick="copyLink()"
+      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+      style="background:var(--card);color:#9090b8;border:1px solid var(--border)">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+      </svg>
+      Copy link
+    </button>
+  </div>
+
+  <!-- Videos -->
+  <div class="flex-1 p-3 overflow-hidden relative">
+    <div id="video-grid"></div>
+
+    <!-- Waiting overlay -->
+    <div id="waiting" class="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
+      <div class="w-14 h-14 rounded-full flex items-center justify-center" style="background:rgba(99,102,241,.15)">
+        <svg class="w-7 h-7" style="color:#6366f1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/>
+        </svg>
+      </div>
+      <div class="text-center">
+        <p class="font-medium text-sm" style="color:#c8c8e0">Waiting for others…</p>
+        <p class="text-xs mt-0.5" style="color:#555570">Share the link to invite people</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="flex items-center justify-center gap-4 py-4 shrink-0"
+       style="background:var(--surface);border-top:1px solid var(--border)">
+
+    <!-- Mic -->
+    <div class="flex flex-col items-center gap-1">
+      <button id="btn-mic" onclick="toggleMic()" class="ctrl" style="background:var(--card)">
+        <!-- mic on -->
+        <svg id="icon-mic-on" class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/>
+        </svg>
+        <!-- mic off -->
+        <svg id="icon-mic-off" class="w-5 h-5 text-red-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/>
+          <line x1="3" y1="3" x2="21" y2="21" stroke-width="2" stroke-linecap="round" class="stroke-red-400"/>
+        </svg>
+      </button>
+      <span class="text-xs" style="color:#555570">Mic</span>
+    </div>
+
+    <!-- Camera -->
+    <div class="flex flex-col items-center gap-1">
+      <button id="btn-cam" onclick="toggleCam()" class="ctrl" style="background:var(--card)">
+        <!-- cam on -->
+        <svg id="icon-cam-on" class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+        <!-- cam off -->
+        <svg id="icon-cam-off" class="w-5 h-5 text-red-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+          <line x1="3" y1="3" x2="21" y2="21" stroke-width="2" stroke-linecap="round" class="stroke-red-400"/>
+        </svg>
+      </button>
+      <span class="text-xs" style="color:#555570">Camera</span>
+    </div>
+
+    <!-- Share -->
+    <div class="flex flex-col items-center gap-1">
+      <button onclick="copyLink()" class="ctrl" style="background:var(--card)">
+        <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z"/>
+        </svg>
+      </button>
+      <span class="text-xs" style="color:#555570">Share</span>
+    </div>
+
+    <!-- Leave -->
+    <div class="flex flex-col items-center gap-1">
+      <button onclick="leaveRoom()" class="ctrl" style="background:#3b1111">
+        <svg class="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
+        </svg>
+      </button>
+      <span class="text-xs" style="color:#555570">Leave</span>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ─── State ────────────────────────────────────────────────
+let ws         = null;
+let myId       = null;
+let roomId     = null;
+let stream     = null;
+let peers      = {};   // userId → RTCPeerConnection
+let micOn      = true;
+let camOn      = true;
+
+const ICE = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
+const COLORS = ['#6366f1','#8b5cf6','#ec4899','#f43f5e',
+                 '#f97316','#eab308','#22c55e','#14b8a6','#3b82f6'];
+const userColor = id => {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return COLORS[Math.abs(h) % COLORS.length];
+};
+
+// ─── Routing ─────────────────────────────────────────────
+window.addEventListener('load', () => {
+  const m = location.pathname.match(/^\/room\/([^/]+)$/);
+  if (m) {
+    showPage('room');
+    enterRoom(m[1]);
+  } else {
+    showPage('home');
+  }
+});
+
+function showPage(p) {
+  document.getElementById('pg-home').className =
+    p === 'home' ? 'flex-1 flex items-center justify-center p-6' : 'hidden';
+  document.getElementById('pg-room').className =
+    p === 'room' ? 'flex flex-col' : 'hidden';
+  if (p === 'room') document.getElementById('pg-room').style.height = '100svh';
+}
+
+// ─── Home ─────────────────────────────────────────────────
+async function createRoom() {
+  const btn = document.getElementById('create-btn');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    const r = await fetch('/api/rooms', { method: 'POST' });
+    const { room_id } = await r.json();
+    location.href = `/room/${room_id}`;
+  } catch {
+    btn.disabled = false; btn.textContent = 'Create Room';
+    toast('Could not reach server');
+  }
+}
+
+function joinFromInput() {
+  const v = document.getElementById('room-input').value.trim();
+  if (v) location.href = `/room/${v}`;
+}
+
+// ─── Room ─────────────────────────────────────────────────
+async function enterRoom(id) {
+  roomId = id;
+  document.getElementById('hdr-room-id').textContent = id;
+
+  // Camera + mic
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  } catch {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+      camOn = false; refreshCamUI();
+    } catch {
+      toast('No camera/mic access');
+    }
+  }
+
+  addLocalTile();
+  refreshGrid();
+
+  // Signaling WebSocket
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/${id}`);
+  ws.onmessage = e => onSignal(JSON.parse(e.data));
+  ws.onclose   = () => toast('Disconnected');
+}
+
+// ─── Video tiles ──────────────────────────────────────────
+function addLocalTile() {
+  const grid = document.getElementById('video-grid');
+  if (document.getElementById('tile-local')) return;
+
+  const tile = el('div', 'vtile pop', { id: 'tile-local' });
+
+  const vid = el('video', '', { autoplay: true, muted: true, playsinline: true });
+  vid.style.transform = 'scaleX(-1)';
+  if (stream) vid.srcObject = stream;
+
+  const noCam = el('div', 'no-cam hidden', { id: 'local-nocam' });
+  const av = el('div', '', {});
+  av.style.cssText = `width:72px;height:72px;border-radius:50%;background:#6366f1;
+    display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;`;
+  av.textContent = 'Y';
+  noCam.appendChild(av);
+
+  const badge = el('div', 'badge'); badge.textContent = 'You';
+
+  tile.append(vid, noCam, badge);
+  grid.appendChild(tile);
+}
+
+function addRemoteTile(uid) {
+  const grid = document.getElementById('video-grid');
+  if (document.getElementById(`tile-${uid}`)) return;
+
+  hideWaiting();
+
+  const tile = el('div', 'vtile pop', { id: `tile-${uid}` });
+
+  const av = el('div', '');
+  av.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;';
+  const circle = el('div', '');
+  circle.style.cssText = `width:80px;height:80px;border-radius:50%;background:${userColor(uid)};
+    display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;`;
+  circle.textContent = uid[0].toUpperCase();
+  av.appendChild(circle);
+
+  const vid = el('video', '', { autoplay: true, playsInline: true, id: `vid-${uid}` });
+  vid.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
+
+  const badge = el('div', 'badge'); badge.textContent = uid;
+
+  tile.append(av, vid, badge);
+  grid.appendChild(tile);
+  refreshGrid();
+}
+
+function removeRemoteTile(uid) {
+  document.getElementById(`tile-${uid}`)?.remove();
+  refreshGrid();
+  if (document.querySelectorAll('.vtile').length <= 1) showWaiting();
+}
+
+function hideWaiting() { document.getElementById('waiting').style.display = 'none'; }
+function showWaiting()  { document.getElementById('waiting').style.display = ''; }
+
+function refreshGrid() {
+  const grid  = document.getElementById('video-grid');
+  const count = document.querySelectorAll('.vtile').length;
+  if      (count <= 1) { grid.style.gridTemplateColumns = '1fr';      grid.style.gridTemplateRows = '1fr'; }
+  else if (count === 2){ grid.style.gridTemplateColumns = '1fr 1fr';  grid.style.gridTemplateRows = '1fr'; }
+  else                 { const c = Math.ceil(Math.sqrt(count));
+                         grid.style.gridTemplateColumns = `repeat(${c},1fr)`;
+                         grid.style.gridTemplateRows    = ''; }
+}
+
+// ─── Signaling ────────────────────────────────────────────
+function onSignal(msg) {
+  switch (msg.type) {
+    case 'you-are':
+      myId = msg.userId;
+      break;
+
+    case 'existing-users':
+      // I'm the new joiner — create offer to each existing user
+      for (const uid of msg.users) createOffer(uid);
+      break;
+
+    case 'user-joined':
+      // Race-condition safe: smaller ID is the offerer
+      if (myId && myId < msg.userId) createOffer(msg.userId);
+      toast('Someone joined');
+      break;
+
+    case 'user-left':
+      closePeer(msg.userId);
+      removeRemoteTile(msg.userId);
+      toast('Someone left');
+      break;
+
+    case 'offer':         handleOffer(msg.from, msg.sdp);         break;
+    case 'answer':        handleAnswer(msg.from, msg.sdp);        break;
+    case 'ice-candidate': handleIce(msg.from, msg.candidate);     break;
+  }
+}
+
+function send(to, data) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ ...data, to }));
+}
+
+// ─── WebRTC ───────────────────────────────────────────────
+function makePeer(uid) {
+  if (peers[uid]) return peers[uid];
+
+  const pc = new RTCPeerConnection({ iceServers: ICE });
+  peers[uid] = pc;
+
+  if (stream) stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+  pc.ontrack = e => {
+    addRemoteTile(uid);
+    const vid = document.getElementById(`vid-${uid}`);
+    if (vid) vid.srcObject = e.streams[0];
+  };
+
+  pc.onicecandidate = e => {
+    if (e.candidate) send(uid, { type: 'ice-candidate', candidate: e.candidate });
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+      closePeer(uid);
+      removeRemoteTile(uid);
+    }
+  };
+
+  return pc;
+}
+
+async function createOffer(uid) {
+  const pc = makePeer(uid);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  send(uid, { type: 'offer', sdp: offer });
+}
+
+async function handleOffer(uid, sdp) {
+  const pc = makePeer(uid);
+  await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  send(uid, { type: 'answer', sdp: answer });
+}
+
+async function handleAnswer(uid, sdp) {
+  peers[uid]?.setRemoteDescription(new RTCSessionDescription(sdp));
+}
+
+async function handleIce(uid, candidate) {
+  if (peers[uid] && candidate) {
+    try { await peers[uid].addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+  }
+}
+
+function closePeer(uid) {
+  peers[uid]?.close();
+  delete peers[uid];
+}
+
+// ─── Controls ─────────────────────────────────────────────
+function toggleMic() {
+  micOn = !micOn;
+  stream?.getAudioTracks().forEach(t => t.enabled = micOn);
+
+  const btn = document.getElementById('btn-mic');
+  btn.classList.toggle('off', !micOn);
+  document.getElementById('icon-mic-on').classList.toggle('hidden', !micOn);
+  document.getElementById('icon-mic-off').classList.toggle('hidden', micOn);
+  toast(micOn ? 'Mic on' : 'Mic off');
+}
+
+function toggleCam() {
+  camOn = !camOn;
+  stream?.getVideoTracks().forEach(t => t.enabled = camOn);
+  refreshCamUI();
+  toast(camOn ? 'Camera on' : 'Camera off');
+}
+
+function refreshCamUI() {
+  const btn = document.getElementById('btn-cam');
+  if (!btn) return;
+  btn.classList.toggle('off', !camOn);
+  document.getElementById('icon-cam-on').classList.toggle('hidden', !camOn);
+  document.getElementById('icon-cam-off').classList.toggle('hidden', camOn);
+  const nc = document.getElementById('local-nocam');
+  if (nc) { nc.classList.toggle('hidden', camOn); }
+}
+
+async function copyLink() {
+  try {
+    await navigator.clipboard.writeText(location.href);
+    toast('Link copied!');
+    const btn = document.getElementById('copy-link-btn');
+    if (btn) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = `<svg class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Copied!`;
+      btn.style.color = '#4ade80';
+      setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
+    }
+  } catch { toast('Cannot copy'); }
+}
+
+function leaveRoom() {
+  Object.keys(peers).forEach(closePeer);
+  ws?.close();
+  stream?.getTracks().forEach(t => t.stop());
+  location.href = '/';
+}
+
+// ─── Utils ────────────────────────────────────────────────
+function el(tag, cls, attrs = {}) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  for (const [k, v] of Object.entries(attrs)) {
+    if (typeof v === 'boolean' && v) e.setAttribute(k, '');
+    else e[k] = v;
+  }
+  return e;
+}
+
+let _toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.opacity = '1';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.style.opacity = '0', 2600);
+}
+</script>
+</body>
+</html>
