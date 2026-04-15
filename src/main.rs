@@ -1,52 +1,56 @@
+mod peer;
+mod room;
+mod signal;
+
 use std::sync::Arc;
 
-use axum::extract::ws::{Message, WebSocket};
 use axum::{
     Router,
     extract::{Path, State, WebSocketUpgrade},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
 };
+use axum::extract::ws::{Message, WebSocket};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-type UserId = String;
+use crate::{
+    peer::setup_peer,
+    room::Room,
+    signal::{ClientMsg, ServerMsg},
+};
 
-#[derive(Clone)]
-struct Room {
-    users: Arc<DashMap<UserId, mpsc::UnboundedSender<String>>>,
-}
-
-impl Room {
-    fn new() -> Self {
-        Self {
-            users: Arc::new(DashMap::new()),
-        }
-    }
-}
+// ── App state ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
     rooms: Arc<DashMap<String, Room>>,
 }
 
-#[derive(Serialize)]
-struct RoomCreated {
-    room_id: String,
+impl AppState {
+    fn get_or_create(&self, id: &str) -> Room {
+        self.rooms
+            .entry(id.to_string())
+            .or_insert_with(Room::new)
+            .clone()
+    }
 }
+
+// ── HTTP handlers ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct RoomCreated { room_id: String }
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
-}
+async fn index() -> Html<&'static str> { Html(INDEX_HTML) }
 
-async fn create_room(State(state): State<AppState>) -> Json<RoomCreated> {
+async fn create_room(State(s): State<AppState>) -> Json<RoomCreated> {
     let id = Uuid::new_v4().to_string()[..8].to_string();
-    state.rooms.insert(id.clone(), Room::new());
+    s.rooms.insert(id.clone(), Room::new());
     Json(RoomCreated { room_id: id })
 }
 
@@ -58,105 +62,102 @@ async fn ws_upgrade(
     ws.on_upgrade(move |socket| handle_ws(socket, room_id, state))
 }
 
+// ── WebSocket / signaling handler ─────────────────────────────────────────────
+
 async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
-    let uid = Uuid::new_v4().to_string()[..8].to_string();
+    let uid  = Uuid::new_v4().to_string()[..8].to_string();
+    let room = state.get_or_create(&room_id);
 
-    // Get or create room; snapshot existing users before inserting self
-    let room = {
-        state.rooms.entry(room_id.clone()).or_insert_with(Room::new);
-        state.rooms.get(&room_id).unwrap().clone()
-    };
+    let (mut ws_sink, mut ws_stream) = socket.split();
+    let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<String>();
 
-    let existing: Vec<String> = room.users.iter().map(|e| e.key().clone()).collect();
-
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    room.users.insert(uid.clone(), tx);
-
-    let (mut ws_tx, mut ws_rx) = socket.split();
-
-    // Greet new user
-    let _ = ws_tx
-        .send(Message::Text(
-            serde_json::json!({"type": "you-are", "userId": uid}).to_string(),
-        ))
-        .await;
-    let _ = ws_tx
-        .send(Message::Text(
-            serde_json::json!({"type": "existing-users", "users": existing}).to_string(),
-        ))
-        .await;
-
-    // Notify others
-    for entry in room.users.iter() {
-        if entry.key().as_str() != uid {
-            let _ = entry
-                .value()
-                .send(serde_json::json!({"type": "user-joined", "userId": uid}).to_string());
-        }
-    }
-
-    // Forward channel messages → WebSocket
-    let mut fwd = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if ws_tx.send(Message::Text(msg)).await.is_err() {
-                break;
-            }
+    // Pump outgoing channel → WebSocket
+    tokio::spawn(async move {
+        while let Some(msg) = ws_rx.recv().await {
+            if ws_sink.send(Message::Text(msg)).await.is_err() { break; }
         }
     });
 
-    // Relay WebSocket messages to target peers
-    let room2 = room.clone();
-    let uid2 = uid.clone();
-    let mut recv = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_rx.next().await {
-            if let Message::Text(text) = msg {
-                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    let to = v["to"].as_str().map(|s| s.to_owned());
-                    v["from"] = serde_json::json!(uid2);
-                    if let Some(target) = to {
-                        if let Some(peer_tx) = room2.users.get(&target) {
-                            let _ = peer_tx.send(v.to_string());
-                        }
-                    }
+    // Tell browser its assigned ID
+    ws_tx.send(
+        serde_json::to_string(&ServerMsg::YouAre { user_id: uid.clone() }).unwrap()
+    ).ok();
+
+    // Wait for the browser's initial offer
+    let offer_sdp = loop {
+        match ws_stream.next().await {
+            Some(Ok(Message::Text(txt))) => {
+                if let Ok(ClientMsg::Offer { sdp }) = serde_json::from_str(&txt) {
+                    break sdp;
                 }
             }
+            _ => return,
         }
-    });
+    };
 
-    tokio::select! {
-        _ = &mut fwd  => recv.abort(),
-        _ = &mut recv => fwd.abort(),
+    // Build server-side PeerConnection + send answer
+    match setup_peer(uid.clone(), offer_sdp, room.clone(), ws_tx.clone()).await {
+        Ok(answer_sdp) => {
+            ws_tx.send(
+                serde_json::to_string(&ServerMsg::Answer { sdp: answer_sdp }).unwrap()
+            ).ok();
+        }
+        Err(e) => { eprintln!("peer setup error for {uid}: {e:#}"); return; }
     }
 
-    // Cleanup
-    room.users.remove(&uid);
-    for entry in room.users.iter() {
-        let _ = entry
-            .value()
-            .send(serde_json::json!({"type": "user-left", "userId": uid}).to_string());
+    // Process ICE candidates and renegotiation answers
+    while let Some(Ok(Message::Text(txt))) = ws_stream.next().await {
+        let Ok(msg) = serde_json::from_str::<ClientMsg>(&txt) else { continue };
+
+        match msg {
+            ClientMsg::IceCandidate { candidate } => {
+                if let Some(peer) = room.peers.get(&uid) {
+                    peer.pc.add_ice_candidate(candidate.into()).await.ok();
+                }
+            }
+            ClientMsg::Answer { sdp } => {
+                if let Some(peer) = room.peers.get(&uid) {
+                    peer.answer_tx.send(sdp).await.ok();
+                }
+            }
+            ClientMsg::Offer { .. } => {} // unexpected after setup
+        }
     }
-    if room.users.is_empty() {
+
+    // ── Cleanup ──────────────────────────────────────────────────────────────
+    // Notify remaining peers before removing
+    for entry in room.peers.iter() {
+        if entry.key().as_str() != uid {
+            let msg = serde_json::to_string(
+                &ServerMsg::UserLeft { user_id: uid.clone() }
+            ).unwrap();
+            entry.value().ws_tx.send(msg).ok();
+        }
+    }
+
+    room.remove(&uid);
+
+    if room.peers.is_empty() {
         state.rooms.remove(&room_id);
     }
 }
 
+// ── Entry point ───────────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() {
-    let state = AppState {
-        rooms: Arc::new(DashMap::new()),
-    };
+    let state = AppState { rooms: Arc::new(DashMap::new()) };
 
     let app = Router::new()
-        .route("/", get(index))
-        .route("/room/:id", get(index))
-        .route("/api/rooms", post(create_room))
-        .route("/ws/:room_id", get(ws_upgrade))
+        .route("/",               get(index))
+        .route("/room/:id",       get(index))
+        .route("/api/rooms",      post(create_room))
+        .route("/ws/:room_id",    get(ws_upgrade))
         .with_state(state);
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let port     = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .unwrap();
+        .await.unwrap();
     println!("rchat → http://localhost:{port}");
     axum::serve(listener, app).await.unwrap();
 }
