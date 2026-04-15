@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use axum::extract::ws::{Message, WebSocket};
 use axum::{
+    Router,
     extract::{Path, State, WebSocketUpgrade},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
-    Router,
 };
-use axum::extract::ws::{Message, WebSocket};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -22,7 +22,9 @@ struct Room {
 
 impl Room {
     fn new() -> Self {
-        Self { users: Arc::new(DashMap::new()) }
+        Self {
+            users: Arc::new(DashMap::new()),
+        }
     }
 }
 
@@ -73,19 +75,23 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Greet new user
-    let _ = ws_tx.send(Message::Text(
-        serde_json::json!({"type": "you-are", "userId": uid}).to_string(),
-    )).await;
-    let _ = ws_tx.send(Message::Text(
-        serde_json::json!({"type": "existing-users", "users": existing}).to_string(),
-    )).await;
+    let _ = ws_tx
+        .send(Message::Text(
+            serde_json::json!({"type": "you-are", "userId": uid}).to_string(),
+        ))
+        .await;
+    let _ = ws_tx
+        .send(Message::Text(
+            serde_json::json!({"type": "existing-users", "users": existing}).to_string(),
+        ))
+        .await;
 
     // Notify others
     for entry in room.users.iter() {
         if entry.key().as_str() != uid {
-            let _ = entry.value().send(
-                serde_json::json!({"type": "user-joined", "userId": uid}).to_string(),
-            );
+            let _ = entry
+                .value()
+                .send(serde_json::json!({"type": "user-joined", "userId": uid}).to_string());
         }
     }
 
@@ -125,9 +131,9 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
     // Cleanup
     room.users.remove(&uid);
     for entry in room.users.iter() {
-        let _ = entry.value().send(
-            serde_json::json!({"type": "user-left", "userId": uid}).to_string(),
-        );
+        let _ = entry
+            .value()
+            .send(serde_json::json!({"type": "user-left", "userId": uid}).to_string());
     }
     if room.users.is_empty() {
         state.rooms.remove(&room_id);
@@ -136,7 +142,9 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
 
 #[tokio::main]
 async fn main() {
-    let state = AppState { rooms: Arc::new(DashMap::new()) };
+    let state = AppState {
+        rooms: Arc::new(DashMap::new()),
+    };
 
     let app = Router::new()
         .route("/", get(index))
@@ -145,7 +153,10 @@ async fn main() {
         .route("/ws/:room_id", get(ws_upgrade))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("rchat → http://localhost:3000");
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .unwrap();
+    println!("rchat → http://localhost:{port}");
     axum::serve(listener, app).await.unwrap();
 }
