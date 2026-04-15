@@ -22,6 +22,25 @@
                 height: 100%;
             }
 
+            /* Local camera — fixed corner pip */
+            #tile-local {
+                position: absolute;
+                bottom: 16px;
+                right: 16px;
+                width: 160px;
+                height: 100px;
+                border-radius: 12px;
+                overflow: hidden;
+                border: 2px solid rgba(255, 255, 255, 0.15);
+                box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+                z-index: 20;
+                cursor: grab;
+                min-height: unset;
+            }
+            #tile-local video {
+                transform: scaleX(-1);
+            }
+
             .vtile {
                 position: relative;
                 border-radius: 16px;
@@ -423,6 +442,34 @@
                     <span class="text-xs" style="color: #555570">Camera</span>
                 </div>
 
+                <!-- Switch camera -->
+                <div
+                    class="flex flex-col items-center gap-1"
+                    id="switch-cam-wrap"
+                >
+                    <button
+                        onclick="switchCamera()"
+                        class="ctrl"
+                        style="background: var(--card)"
+                        title="Switch camera"
+                    >
+                        <svg
+                            class="w-5 h-5 text-white"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                d="M16 3h5m0 0v5m0-5l-6 6M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z"
+                            />
+                        </svg>
+                    </button>
+                    <span class="text-xs" style="color: #555570">Flip</span>
+                </div>
+
                 <!-- Share -->
                 <div class="flex flex-col items-center gap-1">
                     <button
@@ -485,6 +532,8 @@
             let stream = null;
             let micOn = true;
             let camOn = true;
+            let cameras = []; // list of video input devices
+            let camIndex = 0; // current camera index
 
             const COLORS = [
                 "#6366f1",
@@ -570,6 +619,15 @@
                     }
                 }
 
+                // Load camera list (need permission first, so do it after getUserMedia)
+                cameras = (
+                    await navigator.mediaDevices.enumerateDevices()
+                ).filter((d) => d.kind === "videoinput");
+                // Hide flip button if only one camera
+                if (cameras.length <= 1)
+                    document.getElementById("switch-cam-wrap").style.display =
+                        "none";
+
                 addLocalTile();
                 refreshGrid();
 
@@ -620,31 +678,32 @@
 
             // ─── Video tiles ──────────────────────────────────────────
             function addLocalTile() {
-                const grid = document.getElementById("video-grid");
+                // pip lives outside the grid — positioned over the video area
+                const container =
+                    document.getElementById("video-grid").parentElement;
                 if (document.getElementById("tile-local")) return;
 
-                const tile = el("div", "vtile pop", { id: "tile-local" });
+                const tile = el("div", "vtile", { id: "tile-local" });
 
                 const vid = el("video", "", {
                     autoplay: true,
                     muted: true,
                     playsinline: true,
                 });
-                vid.style.transform = "scaleX(-1)";
                 if (stream) vid.srcObject = stream;
 
                 const noCam = el("div", "no-cam hidden", { id: "local-nocam" });
-                const av = el("div", "", {});
-                av.style.cssText = `width:72px;height:72px;border-radius:50%;background:#6366f1;
-    display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;`;
+                const av = el("div", "");
+                av.style.cssText =
+                    "width:48px;height:48px;border-radius:50%;background:#6366f1;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;";
                 av.textContent = "Y";
                 noCam.appendChild(av);
 
-                const badge = el("div", "badge");
-                badge.textContent = "You";
+                tile.append(vid, noCam);
+                container.appendChild(tile);
 
-                tile.append(vid, noCam, badge);
-                grid.appendChild(tile);
+                // Drag to reposition
+                makeDraggable(tile);
             }
 
             function addRemoteTile(uid) {
@@ -683,8 +742,8 @@
             function removeRemoteTile(uid) {
                 document.getElementById(`tile-${uid}`)?.remove();
                 refreshGrid();
-                if (document.querySelectorAll(".vtile").length <= 1)
-                    showWaiting();
+                const grid = document.getElementById("video-grid");
+                if (grid.querySelectorAll(".vtile").length === 0) showWaiting();
             }
 
             function hideWaiting() {
@@ -696,7 +755,8 @@
 
             function refreshGrid() {
                 const grid = document.getElementById("video-grid");
-                const count = document.querySelectorAll(".vtile").length;
+                // count only remote tiles (local pip is outside the grid)
+                const count = grid.querySelectorAll(".vtile").length;
                 if (count <= 1) {
                     grid.style.gridTemplateColumns = "1fr";
                     grid.style.gridTemplateRows = "1fr";
@@ -770,6 +830,39 @@
                 toast(micOn ? "Mic on" : "Mic off");
             }
 
+            async function switchCamera() {
+                if (cameras.length <= 1) return;
+                camIndex = (camIndex + 1) % cameras.length;
+
+                const newCam = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: cameras[camIndex].deviceId } },
+                    audio: false,
+                });
+                const newTrack = newCam.getVideoTracks()[0];
+
+                // Swap in the local stream
+                const oldTrack = stream.getVideoTracks()[0];
+                if (oldTrack) {
+                    stream.removeTrack(oldTrack);
+                    oldTrack.stop();
+                }
+                stream.addTrack(newTrack);
+
+                // Update local video preview
+                const localVid = document.querySelector("#tile-local video");
+                if (localVid) localVid.srcObject = stream;
+
+                // Replace in the active PC without renegotiation
+                if (pc) {
+                    const sender = pc
+                        .getSenders()
+                        .find((s) => s.track?.kind === "video");
+                    if (sender) await sender.replaceTrack(newTrack);
+                }
+
+                toast(`Camera ${camIndex + 1} of ${cameras.length}`);
+            }
+
             function toggleCam() {
                 camOn = !camOn;
                 stream?.getVideoTracks().forEach((t) => (t.enabled = camOn));
@@ -828,6 +921,27 @@
                     else e[k] = v;
                 }
                 return e;
+            }
+
+            // ─── Draggable pip ────────────────────────────────────────
+            function makeDraggable(el) {
+                let ox, oy;
+                el.addEventListener("pointerdown", (e) => {
+                    ox = e.clientX - el.offsetLeft;
+                    oy = e.clientY - el.offsetTop;
+                    el.setPointerCapture(e.pointerId);
+                    el.style.cursor = "grabbing";
+                    el.style.right = "unset";
+                    el.style.bottom = "unset";
+                });
+                el.addEventListener("pointermove", (e) => {
+                    if (!e.buttons) return;
+                    el.style.left = `${e.clientX - ox}px`;
+                    el.style.top = `${e.clientY - oy}px`;
+                });
+                el.addEventListener("pointerup", () => {
+                    el.style.cursor = "grab";
+                });
             }
 
             let _toastTimer;
