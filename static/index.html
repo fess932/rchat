@@ -685,11 +685,10 @@
 
                 const tile = el("div", "vtile", { id: "tile-local" });
 
-                const vid = el("video", "", {
-                    autoplay: true,
-                    muted: true,
-                    playsinline: true,
-                });
+                const vid = document.createElement("video");
+                vid.autoplay    = true;
+                vid.muted       = true;  // property, not attribute — setAttribute("muted") unreliable in Chrome
+                vid.playsInline = true;
                 if (stream) vid.srcObject = stream;
 
                 const noCam = el("div", "no-cam hidden", { id: "local-nocam" });
