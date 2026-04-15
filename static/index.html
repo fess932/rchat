@@ -600,24 +600,35 @@
                 roomId = id;
                 document.getElementById("hdr-room-id").textContent = id;
 
-                // Camera + mic
+                // Camera + mic — запрашиваем раздельно: на Android один общий запрос
+                // с audio-ограничениями часто падает, забирая с собой и видео.
+                const audioConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
+                let audioTracks = [], videoTracks = [];
+
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({
-                        video: true,
-                        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-                    });
-                } catch {
-                    try {
-                        stream = await navigator.mediaDevices.getUserMedia({
-                            video: false,
-                            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-                        });
-                        camOn = false;
-                        refreshCamUI();
-                    } catch {
-                        toast("No camera/mic access");
-                    }
+                    const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+                    audioTracks = s.getAudioTracks();
+                } catch (e) {
+                    console.warn("[rchat] audio failed:", e);
+                    toast("Mic unavailable");
                 }
+
+                try {
+                    const s = await navigator.mediaDevices.getUserMedia({ video: true });
+                    videoTracks = s.getVideoTracks();
+                } catch (e) {
+                    console.warn("[rchat] video failed:", e);
+                    camOn = false;
+                    refreshCamUI();
+                }
+
+                if (audioTracks.length || videoTracks.length) {
+                    stream = new MediaStream([...audioTracks, ...videoTracks]);
+                } else {
+                    toast("No camera/mic access");
+                }
+                console.log("[rchat] tracks:", stream?.getTracks().map(t => `${t.kind}:${t.readyState}`).join(", "));
 
                 // Load camera list (need permission first, so do it after getUserMedia)
                 cameras = (
