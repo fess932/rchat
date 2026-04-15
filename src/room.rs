@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use dashmap::DashMap;
 use tokio::sync::{mpsc, Mutex};
@@ -9,6 +12,25 @@ use webrtc::{
 
 pub type UserId = String;
 
+/// Global app state — shared between HTTP handlers and the dashboard.
+#[derive(Clone)]
+pub struct AppState {
+    pub rooms: Arc<DashMap<String, Room>>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self { rooms: Arc::new(DashMap::new()) }
+    }
+
+    pub fn get_or_create(&self, id: &str) -> Room {
+        self.rooms
+            .entry(id.to_string())
+            .or_insert_with(Room::new)
+            .clone()
+    }
+}
+
 /// Per-peer server-side state
 pub struct PeerState {
     pub pc:        Arc<RTCPeerConnection>,
@@ -18,6 +40,14 @@ pub struct PeerState {
     pub answer_tx: mpsc::Sender<String>,
     /// Receive renegotiation answers (used inside renegotiate())
     pub answer_rx: Arc<Mutex<mpsc::Receiver<String>>>,
+    /// Total RTP payload bytes received from this peer (monotonically increasing)
+    pub bytes_up:  Arc<AtomicU64>,
+}
+
+impl PeerState {
+    pub fn load_bytes_up(&self) -> u64 {
+        self.bytes_up.load(Ordering::Relaxed)
+    }
 }
 
 /// Shared state for one room

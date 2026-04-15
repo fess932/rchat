@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -75,13 +75,16 @@ pub async fn setup_peer(
     }
 
     // When the browser sends us a media track — create a relay and fan it out
+    let bytes_up = Arc::new(AtomicU64::new(0));
     {
         let room = room.clone();
         let uid = uid.clone();
+        let bytes_up = Arc::clone(&bytes_up);
 
         pc.on_track(Box::new(move |track, _, _| {
             let room = room.clone();
             let uid  = uid.clone();
+            let bytes_up = Arc::clone(&bytes_up); // each on_track call (audio / video) shares the counter
 
             Box::pin(async move {
                 let kind_str = match track.kind() {
@@ -141,6 +144,7 @@ pub async fn setup_peer(
                 while let Ok((pkt, _)) = track.read_rtp().await {
                     n += 1;
                     if n == 1 { eprintln!("[sfu] first RTP uid={uid} kind={kind_str}"); }
+                    bytes_up.fetch_add(pkt.payload.len() as u64, Ordering::Relaxed);
                     if relay.write_rtp(&pkt).await.is_err() {
                         break;
                     }
@@ -159,6 +163,7 @@ pub async fn setup_peer(
             ws_tx,
             answer_tx,
             answer_rx: Arc::new(tokio::sync::Mutex::new(answer_rx)),
+            bytes_up,
         }),
     );
 

@@ -1,8 +1,7 @@
+mod dashboard;
 mod peer;
 mod room;
 mod signal;
-
-use std::sync::Arc;
 
 use axum::{
     Router,
@@ -11,7 +10,6 @@ use axum::{
     routing::{get, post},
 };
 use axum::extract::ws::{Message, WebSocket};
-use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -19,25 +17,9 @@ use uuid::Uuid;
 
 use crate::{
     peer::setup_peer,
-    room::Room,
+    room::{AppState, Room},
     signal::{ClientMsg, ServerMsg},
 };
-
-// ── App state ────────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct AppState {
-    rooms: Arc<DashMap<String, Room>>,
-}
-
-impl AppState {
-    fn get_or_create(&self, id: &str) -> Room {
-        self.rooms
-            .entry(id.to_string())
-            .or_insert_with(Room::new)
-            .clone()
-    }
-}
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
@@ -146,7 +128,10 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
 
 #[tokio::main]
 async fn main() {
-    let state = AppState { rooms: Arc::new(DashMap::new()) };
+    let state = AppState::new();
+    let port  = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+
+    dashboard::spawn(state.clone(), port.clone());
 
     let app = Router::new()
         .route("/",               get(index))
@@ -155,9 +140,7 @@ async fn main() {
         .route("/ws/:room_id",    get(ws_upgrade))
         .with_state(state);
 
-    let port     = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await.unwrap();
-    println!("rchat → http://localhost:{port}");
     axum::serve(listener, app).await.unwrap();
 }
