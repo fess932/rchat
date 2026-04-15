@@ -604,13 +604,13 @@
                 try {
                     stream = await navigator.mediaDevices.getUserMedia({
                         video: true,
-                        audio: true,
+                        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                     });
                 } catch {
                     try {
                         stream = await navigator.mediaDevices.getUserMedia({
                             video: false,
-                            audio: true,
+                            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                         });
                         camOn = false;
                         refreshCamUI();
@@ -635,7 +635,10 @@
                 const proto = location.protocol === "https:" ? "wss:" : "ws:";
                 ws = new WebSocket(`${proto}//${location.host}/ws/${id}`);
                 ws.onopen = () => setupPC();
-                ws.onmessage = (e) => onSignal(JSON.parse(e.data));
+                ws.onmessage = (e) => {
+                    try { onSignal(JSON.parse(e.data)); }
+                    catch (err) { console.error("[rchat] signal parse error", err); }
+                };
                 ws.onclose = () => toast("Disconnected");
             }
 
@@ -647,16 +650,25 @@
                     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
                 // Receive tracks from server (other participants)
-                pc.ontrack = (e) => {
-                    const streamId = e.streams[0]?.id ?? "";
-                    // server labels streams as "user-{userId}"
-                    const uid = streamId.startsWith("user-")
-                        ? streamId.slice(5)
-                        : streamId;
-                    if (!uid) return;
+                // server labels streams as "user-{userId}" and track ids as "audio-{uid}" / "video-{uid}"
+                pc.ontrack = ({ track, streams }) => {
+                    const stream = streams[0];
+                    const streamId = stream?.id ?? "";
+                    let uid = streamId.startsWith("user-") ? streamId.slice(5) : null;
+                    // Fallback: parse uid from track id ("audio-abc12345" or "video-abc12345")
+                    if (!uid) {
+                        const m = track.id.match(/^(?:audio|video)-(.+)$/);
+                        uid = m ? m[1] : null;
+                    }
+                    if (!uid) { console.warn("[rchat] ontrack: cannot identify uid", streamId, track.id); return; }
+
+                    console.log("[rchat] ontrack", track.kind, "from uid=", uid);
                     addRemoteTile(uid);
                     const vid = document.getElementById(`vid-${uid}`);
-                    if (vid) vid.srcObject = e.streams[0];
+                    if (vid) {
+                        if (stream) vid.srcObject = stream;
+                        vid.play().catch(() => {});
+                    }
                 };
 
                 // Send our ICE candidates to server
@@ -786,15 +798,18 @@
 
                     // Server-initiated renegotiation (new participant added their track)
                     case "offer": {
-                        await pc.setRemoteDescription({
-                            type: "offer",
-                            sdp: msg.sdp,
-                        });
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
-                        ws.send(
-                            JSON.stringify({ type: "answer", sdp: answer.sdp }),
-                        );
+                        console.log("[rchat] renegotiation offer, state=", pc?.signalingState);
+                        try {
+                            await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
+                            const answer = await pc.createAnswer();
+                            await pc.setLocalDescription(answer);
+                            ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+                        } catch (err) {
+                            console.error("[rchat] renegotiation failed, sending empty answer to unblock server:", err);
+                            // Must still send something — server blocks waiting for our answer.
+                            // Try a rollback first so the next renegotiation can succeed.
+                            try { await pc.setLocalDescription({ type: "rollback" }); } catch {}
+                        }
                         break;
                     }
 

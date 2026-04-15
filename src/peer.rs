@@ -11,6 +11,7 @@ use webrtc::{
     rtp_transceiver::rtp_codec::RTPCodecType,
     track::track_local::{track_local_static_rtp::TrackLocalStaticRTP, TrackLocalWriter},
 };
+use tokio::time::{timeout, Duration};
 
 use crate::{
     room::{PeerState, Room, UserId},
@@ -42,7 +43,9 @@ pub async fn setup_peer(
     );
 
     // Send existing participants' relay tracks to the new peer
-    for track in room.relay_tracks_except(&uid) {
+    let existing = room.relay_tracks_except(&uid);
+    eprintln!("[sfu] setup_peer uid={uid}: adding {} existing relay track(s)", existing.len());
+    for track in existing {
         pc.add_track(Arc::clone(&track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await?;
     }
@@ -87,11 +90,13 @@ pub async fn setup_peer(
                     _ => return,
                 };
 
+                eprintln!("[sfu] on_track uid={uid} kind={kind_str}");
+
                 // Relay track: same codec, ID encodes owner for the browser
                 let relay = Arc::new(TrackLocalStaticRTP::new(
                     track.codec().capability.clone(),
-                    format!("{kind_str}-{uid}"),   // track id
-                    format!("user-{uid}"),          // stream id (browser uses this)
+                    format!("{kind_str}-{uid}"),   // track id  — browser can parse uid from this
+                    format!("user-{uid}"),          // stream id — browser uses this to group tracks
                 ));
 
                 room.tracks
@@ -99,12 +104,19 @@ pub async fn setup_peer(
                     .or_insert_with(Vec::new)
                     .push(Arc::clone(&relay));
 
+                let other_peers: Vec<_> = room.peers.iter()
+                    .filter(|e| e.key().as_str() != uid)
+                    .map(|e| (e.key().clone(), Arc::clone(e.value())))
+                    .collect();
+
+                eprintln!("[sfu] relay {kind_str}-{uid}: will notify {} peer(s)", other_peers.len());
+
                 // Add relay to every other peer and renegotiate
-                for entry in room.peers.iter() {
-                    if entry.key().as_str() == uid { continue; }
-                    let peer  = Arc::clone(entry.value());
+                for (peer_uid, peer) in other_peers {
                     let relay = Arc::clone(&relay);
+                    let uid = uid.clone();
                     tokio::spawn(async move {
+                        eprintln!("[sfu] adding {kind_str}-{uid} to peer={peer_uid}");
                         if peer
                             .pc
                             .add_track(
@@ -113,19 +125,27 @@ pub async fn setup_peer(
                             .await
                             .is_ok()
                         {
-                            if let Err(e) = renegotiate(&peer).await {
-                                eprintln!("renegotiate error: {e:#}");
+                            eprintln!("[sfu] renegotiating with peer={peer_uid} for {kind_str}-{uid}");
+                            match renegotiate(&peer).await {
+                                Ok(()) => eprintln!("[sfu] renegotiation done peer={peer_uid}"),
+                                Err(e) => eprintln!("[sfu] renegotiate error peer={peer_uid}: {e:#}"),
                             }
+                        } else {
+                            eprintln!("[sfu] add_track failed for peer={peer_uid}");
                         }
                     });
                 }
 
                 // RTP forwarding loop — copy packets verbatim to relay
+                let mut n: u64 = 0;
                 while let Ok((pkt, _)) = track.read_rtp().await {
+                    n += 1;
+                    if n == 1 { eprintln!("[sfu] first RTP uid={uid} kind={kind_str}"); }
                     if relay.write_rtp(&pkt).await.is_err() {
                         break;
                     }
                 }
+                eprintln!("[sfu] RTP loop ended uid={uid} kind={kind_str} pkts={n}");
             })
         }));
     }
@@ -156,9 +176,9 @@ pub async fn renegotiate(peer: &PeerState) -> Result<()> {
 
     // Wait for the browser's answer (serialised by the Mutex)
     let mut rx = peer.answer_rx.lock().await;
-    let sdp = rx
-        .recv()
+    let sdp = timeout(Duration::from_secs(15), rx.recv())
         .await
+        .map_err(|_| anyhow::anyhow!("renegotiation answer timed out after 15 s"))?
         .ok_or_else(|| anyhow::anyhow!("answer channel closed"))?;
 
     peer.pc
