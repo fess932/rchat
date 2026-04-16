@@ -444,14 +444,15 @@
 
                 <!-- Switch camera -->
                 <div
-                    class="flex flex-col items-center gap-1"
+                    class="flex flex-col items-center gap-1 relative"
                     id="switch-cam-wrap"
                 >
                     <button
-                        onclick="switchCamera()"
+                        onclick="toggleCamPicker()"
                         class="ctrl"
                         style="background: var(--card)"
-                        title="Switch camera"
+                        title="Select camera"
+                        id="btn-cam-pick"
                     >
                         <svg
                             class="w-5 h-5 text-white"
@@ -468,6 +469,18 @@
                         </svg>
                     </button>
                     <span class="text-xs" style="color: #555570">Flip</span>
+
+                    <!-- Camera picker popup -->
+                    <div
+                        id="cam-picker"
+                        class="hidden absolute bottom-16 left-1/2 -translate-x-1/2 rounded-xl overflow-hidden shadow-2xl z-50"
+                        style="
+                            background: var(--surface);
+                            border: 1px solid var(--border);
+                            min-width: 200px;
+                            max-width: 280px;
+                        "
+                    ></div>
                 </div>
 
                 <!-- Share -->
@@ -634,10 +647,9 @@
                 cameras = (
                     await navigator.mediaDevices.enumerateDevices()
                 ).filter((d) => d.kind === "videoinput");
-                // Hide flip button if only one camera
-                if (cameras.length <= 1)
-                    document.getElementById("switch-cam-wrap").style.display =
-                        "none";
+                // Hide picker button if no cameras at all
+                if (cameras.length === 0)
+                    document.getElementById("switch-cam-wrap").style.display = "none";
 
                 addLocalTile();
                 refreshGrid();
@@ -855,37 +867,92 @@
                 toast(micOn ? "Mic on" : "Mic off");
             }
 
-            async function switchCamera() {
-                if (cameras.length <= 1) return;
-                camIndex = (camIndex + 1) % cameras.length;
+            function toggleCamPicker() {
+                const picker = document.getElementById("cam-picker");
+                if (!picker.classList.contains("hidden")) {
+                    picker.classList.add("hidden");
+                    return;
+                }
+                // Build list
+                picker.innerHTML = "";
+                const currentTrack = stream?.getVideoTracks()[0];
+                const currentId = currentTrack?.getSettings().deviceId;
 
-                const newCam = await navigator.mediaDevices.getUserMedia({
-                    video: { deviceId: { exact: cameras[camIndex].deviceId } },
-                    audio: false,
+                cameras.forEach((cam, i) => {
+                    const item = document.createElement("button");
+                    const active = cam.deviceId === currentId;
+                    item.style.cssText = `
+                        width: 100%; text-align: left; padding: 10px 14px;
+                        font-size: 13px; color: ${active ? "#a5b4fc" : "#c8c8e0"};
+                        background: ${active ? "rgba(99,102,241,.15)" : "transparent"};
+                        border: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+                    `;
+                    item.onmouseenter = () => { if (!active) item.style.background = "rgba(255,255,255,.05)"; };
+                    item.onmouseleave = () => { if (!active) item.style.background = "transparent"; };
+
+                    const dot = document.createElement("span");
+                    dot.style.cssText = `width:6px;height:6px;border-radius:50%;flex-shrink:0;background:${active ? "#a5b4fc" : "transparent"};border:1px solid ${active ? "#a5b4fc" : "#555570"};`;
+                    const label = document.createElement("span");
+                    label.textContent = cam.label || `Camera ${i + 1}`;
+                    label.style.overflow = "hidden";
+                    label.style.textOverflow = "ellipsis";
+                    label.style.whiteSpace = "nowrap";
+
+                    item.append(dot, label);
+                    item.onclick = () => switchCamera(i);
+                    picker.appendChild(item);
                 });
-                const newTrack = newCam.getVideoTracks()[0];
 
-                // Swap in the local stream
-                const oldTrack = stream.getVideoTracks()[0];
-                if (oldTrack) {
-                    stream.removeTrack(oldTrack);
-                    oldTrack.stop();
+                picker.classList.remove("hidden");
+
+                // Close on outside click
+                setTimeout(() => {
+                    const close = (e) => {
+                        if (!picker.contains(e.target) && e.target.id !== "btn-cam-pick") {
+                            picker.classList.add("hidden");
+                            document.removeEventListener("pointerdown", close);
+                        }
+                    };
+                    document.addEventListener("pointerdown", close);
+                }, 0);
+            }
+
+            async function switchCamera(index) {
+                document.getElementById("cam-picker").classList.add("hidden");
+                if (index !== undefined) camIndex = index;
+                else if (cameras.length > 1) camIndex = (camIndex + 1) % cameras.length;
+                else return;
+
+                const cam = cameras[camIndex];
+                if (!cam) return;
+
+                try {
+                    const newCam = await navigator.mediaDevices.getUserMedia({
+                        video: { deviceId: { exact: cam.deviceId } },
+                        audio: false,
+                    });
+                    const newTrack = newCam.getVideoTracks()[0];
+
+                    const oldTrack = stream?.getVideoTracks()[0];
+                    if (oldTrack) { stream.removeTrack(oldTrack); oldTrack.stop(); }
+                    if (!stream) stream = new MediaStream();
+                    stream.addTrack(newTrack);
+
+                    const localVid = document.querySelector("#tile-local video");
+                    if (localVid) localVid.srcObject = stream;
+
+                    if (pc) {
+                        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+                        if (sender) await sender.replaceTrack(newTrack);
+                    }
+
+                    // Re-show cam if it was off
+                    if (!camOn) { camOn = true; refreshCamUI(); }
+                    toast(cam.label || `Camera ${camIndex + 1}`);
+                } catch (e) {
+                    console.error("[rchat] switchCamera failed:", e);
+                    toast("Camera unavailable");
                 }
-                stream.addTrack(newTrack);
-
-                // Update local video preview
-                const localVid = document.querySelector("#tile-local video");
-                if (localVid) localVid.srcObject = stream;
-
-                // Replace in the active PC without renegotiation
-                if (pc) {
-                    const sender = pc
-                        .getSenders()
-                        .find((s) => s.track?.kind === "video");
-                    if (sender) await sender.replaceTrack(newTrack);
-                }
-
-                toast(`Camera ${camIndex + 1} of ${cameras.length}`);
             }
 
             function toggleCam() {
