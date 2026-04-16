@@ -613,27 +613,36 @@
                 roomId = id;
                 document.getElementById("hdr-room-id").textContent = id;
 
-                // Camera + mic — запрашиваем раздельно: на Android один общий запрос
-                // с audio-ограничениями часто падает, забирая с собой и видео.
+                // Camera + mic.
+                // Сначала пробуем комбинированный запрос — он надёжнее на десктопе.
+                // Если падает (типично на Android) — запрашиваем аудио и видео раздельно,
+                // чтобы ошибка одного не убивала другое.
                 const audioConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-
                 let audioTracks = [], videoTracks = [];
 
                 try {
-                    const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+                    const s = await navigator.mediaDevices.getUserMedia({
+                        video: true, audio: audioConstraints,
+                    });
                     audioTracks = s.getAudioTracks();
-                } catch (e) {
-                    console.warn("[rchat] audio failed:", e);
-                    toast("Mic unavailable");
-                }
-
-                try {
-                    const s = await navigator.mediaDevices.getUserMedia({ video: true });
                     videoTracks = s.getVideoTracks();
+                    console.log("[rchat] combined getUserMedia ok");
                 } catch (e) {
-                    console.warn("[rchat] video failed:", e);
-                    camOn = false;
-                    refreshCamUI();
+                    console.warn("[rchat] combined failed, trying separately:", e);
+
+                    try {
+                        const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+                        audioTracks = s.getAudioTracks();
+                    } catch (e2) { console.warn("[rchat] audio failed:", e2); }
+
+                    try {
+                        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+                        videoTracks = s.getVideoTracks();
+                    } catch (e2) {
+                        console.warn("[rchat] video failed:", e2);
+                        camOn = false;
+                        refreshCamUI();
+                    }
                 }
 
                 if (audioTracks.length || videoTracks.length) {
@@ -741,11 +750,7 @@
                 console.log("[rchat] local tile track:", localVideoTrack?.label, localVideoTrack?.readyState);
                 if (localVideoTrack) {
                     vid.srcObject = new MediaStream([localVideoTrack]);
-                    vid.onloadedmetadata = () => {
-                        vid.play().catch(e => console.warn("[rchat] local play failed:", e));
-                    };
-                    // Fallback если metadata уже готова
-                    if (vid.readyState >= 1) vid.play().catch(() => {});
+                    vid.play().catch(e => console.warn("[rchat] local play failed:", e));
                 }
 
                 // Drag to reposition
