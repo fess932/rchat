@@ -56,7 +56,7 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
     // Pump outgoing channel → WebSocket
     tokio::spawn(async move {
         while let Some(msg) = ws_rx.recv().await {
-            if ws_sink.send(Message::Text(msg)).await.is_err() { break; }
+            if ws_sink.send(Message::Text(msg.into())).await.is_err() { break; }
         }
     });
 

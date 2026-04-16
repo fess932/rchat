@@ -8,7 +8,7 @@ use webrtc::{
     peer_connection::{
         configuration::RTCConfiguration, sdp::session_description::RTCSessionDescription,
     },
-    rtp_transceiver::rtp_codec::RTPCodecType,
+    rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType},
     track::track_local::{track_local_static_rtp::TrackLocalStaticRTP, TrackLocalWriter},
 };
 use tokio::time::{timeout, Duration};
@@ -20,7 +20,47 @@ use crate::{
 
 fn build_api() -> Result<webrtc::api::API> {
     let mut m = MediaEngine::default();
-    m.register_default_codecs()?;
+
+    // Register audio: Opus
+    m.register_codec(
+        RTCRtpCodecParameters {
+            capability: RTCRtpCodecCapability {
+                mime_type:    "audio/opus".to_string(),
+                clock_rate:   48000,
+                channels:     2,
+                sdp_fmtp_line: "minptime=10;useinbandfec=1".to_string(),
+                rtcp_feedback: vec![],
+            },
+            payload_type: 111,
+            ..Default::default()
+        },
+        RTPCodecType::Audio,
+    )?;
+
+    // Register video: VP8, VP9, H264 — intentionally exclude AV1
+    // webrtc-rs includes AV1 in register_default_codecs() but can't process it;
+    // Chrome picks it as preferred and on_track never fires.
+    for (mime, pt, fmtp) in [
+        ("video/VP8",  96u8, ""),
+        ("video/VP9",  98,   "profile-id=0"),
+        ("video/H264", 102,  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"),
+    ] {
+        m.register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type:    mime.to_string(),
+                    clock_rate:   90000,
+                    channels:     0,
+                    sdp_fmtp_line: fmtp.to_string(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type: pt,
+                ..Default::default()
+            },
+            RTPCodecType::Video,
+        )?;
+    }
+
     Ok(APIBuilder::new().with_media_engine(m).build())
 }
 
