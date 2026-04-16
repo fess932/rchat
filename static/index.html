@@ -722,9 +722,8 @@
 
                 const vid = document.createElement("video");
                 vid.autoplay    = true;
-                vid.muted       = true;  // property, not attribute — setAttribute("muted") unreliable in Chrome
+                vid.muted       = true;
                 vid.playsInline = true;
-                if (stream) vid.srcObject = stream;
 
                 const noCam = el("div", "no-cam hidden", { id: "local-nocam" });
                 const av = el("div", "");
@@ -734,7 +733,16 @@
                 noCam.appendChild(av);
 
                 tile.append(vid, noCam);
-                container.appendChild(tile);
+                container.appendChild(tile); // сначала в DOM
+
+                // srcObject и play — после добавления в DOM
+                if (stream) {
+                    const vt = stream.getVideoTracks();
+                    console.log("[rchat] local tile: videoTracks=", vt.length,
+                        vt.map(t => `${t.label} readyState=${t.readyState}`));
+                    vid.srcObject = stream;
+                    vid.play().catch(e => console.warn("[rchat] local play failed:", e));
+                }
 
                 // Drag to reposition
                 makeDraggable(tile);
