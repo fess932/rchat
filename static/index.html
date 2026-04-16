@@ -841,12 +841,15 @@
                         break;
 
                     // Server sends answer to our initial offer
-                    case "answer":
-                        await pc.setRemoteDescription({
-                            type: "answer",
-                            sdp: msg.sdp,
-                        });
+                    case "answer": {
+                        const lines = msg.sdp.split(/\r?\n/);
+                        const mVideo = lines.find(l => l.startsWith("m=video"));
+                        const aDir   = lines.filter(l => l.match(/^a=(sendrecv|recvonly|sendonly|inactive)/));
+                        console.log("[rchat] answer m=video:", mVideo);
+                        console.log("[rchat] answer directions:", aDir);
+                        await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
                         break;
+                    }
 
                     // Server-initiated renegotiation (new participant added their track)
                     case "offer": {
