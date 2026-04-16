@@ -742,9 +742,9 @@
                 const tile = el("div", "vtile", { id: "tile-local" });
 
                 const vid = document.createElement("video");
-                vid.autoplay    = true;
-                vid.muted       = true;
-                vid.playsInline = true;
+                vid.setAttribute("autoplay", "");
+                vid.setAttribute("muted", "");
+                vid.setAttribute("playsinline", "");
 
                 const noCam = el("div", "no-cam hidden", { id: "local-nocam" });
                 const av = el("div", "");
@@ -762,7 +762,7 @@
                 console.log("[rchat] local tile track:", localVideoTrack?.label, localVideoTrack?.readyState);
                 if (localVideoTrack) {
                     vid.srcObject = new MediaStream([localVideoTrack]);
-                    vid.play().catch(e => console.warn("[rchat] local play failed:", e));
+                    vid.play().catch(e => console.error("[rchat] local play failed:", e.name, e.message));
                 }
 
                 // Drag to reposition
