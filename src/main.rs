@@ -135,9 +135,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/",               get(index))
-        .route("/room/:id",       get(index))
+        .route("/room/{id}",      get(index))
         .route("/api/rooms",      post(create_room))
-        .route("/ws/:room_id",    get(ws_upgrade))
+        .route("/ws/{room_id}",   get(ws_upgrade))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
