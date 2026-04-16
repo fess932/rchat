@@ -678,8 +678,20 @@
                 pc = new RTCPeerConnection();
 
                 // Add local tracks to send to server
-                if (stream)
-                    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+                if (stream) {
+                    const tracks = stream.getTracks();
+                    console.log("[rchat] setupPC tracks:", tracks.map(t => `${t.kind}:${t.readyState}:enabled=${t.enabled}`));
+                    tracks.forEach((t) => pc.addTrack(t, stream));
+                }
+
+                // Check offer SDP for video m-section
+                const _origCreateOffer = pc.createOffer.bind(pc);
+                pc.createOffer = async (...args) => {
+                    const offer = await _origCreateOffer(...args);
+                    const sections = (offer.sdp.match(/^m=\S+/mg) || []);
+                    console.log("[rchat] offer m-sections:", sections);
+                    return offer;
+                };
 
                 // Receive tracks from server (other participants)
                 // server labels streams as "user-{userId}" and track ids as "audio-{uid}" / "video-{uid}"
