@@ -735,13 +735,17 @@
                 tile.append(vid, noCam);
                 container.appendChild(tile); // сначала в DOM
 
-                // srcObject и play — после добавления в DOM
-                if (stream) {
-                    const vt = stream.getVideoTracks();
-                    console.log("[rchat] local tile: videoTracks=", vt.length,
-                        vt.map(t => `${t.label} readyState=${t.readyState}`));
-                    vid.srcObject = stream;
-                    vid.play().catch(e => console.warn("[rchat] local play failed:", e));
+                // Локальное превью — только видео-трек, без аудио в srcObject.
+                // Мьют не всегда надёжно предотвращает блокировку autoplay на некоторых браузерах.
+                const localVideoTrack = stream?.getVideoTracks()[0];
+                console.log("[rchat] local tile track:", localVideoTrack?.label, localVideoTrack?.readyState);
+                if (localVideoTrack) {
+                    vid.srcObject = new MediaStream([localVideoTrack]);
+                    vid.onloadedmetadata = () => {
+                        vid.play().catch(e => console.warn("[rchat] local play failed:", e));
+                    };
+                    // Fallback если metadata уже готова
+                    if (vid.readyState >= 1) vid.play().catch(() => {});
                 }
 
                 // Drag to reposition
@@ -947,7 +951,10 @@
                     stream.addTrack(newTrack);
 
                     const localVid = document.querySelector("#tile-local video");
-                    if (localVid) localVid.srcObject = stream;
+                    if (localVid) {
+                        localVid.srcObject = new MediaStream([newTrack]);
+                        localVid.play().catch(() => {});
+                    }
 
                     if (pc) {
                         const sender = pc.getSenders().find((s) => s.track?.kind === "video");
