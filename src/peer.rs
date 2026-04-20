@@ -21,13 +21,13 @@ use crate::{
 fn build_api() -> Result<webrtc::api::API> {
     let mut m = MediaEngine::default();
 
-    // Register audio: Opus
+    // Opus audio
     m.register_codec(
         RTCRtpCodecParameters {
             capability: RTCRtpCodecCapability {
-                mime_type:    "audio/opus".to_string(),
-                clock_rate:   48000,
-                channels:     2,
+                mime_type:     "audio/opus".to_string(),
+                clock_rate:    48000,
+                channels:      2,
                 sdp_fmtp_line: "minptime=10;useinbandfec=1".to_string(),
                 rtcp_feedback: vec![],
             },
@@ -37,20 +37,22 @@ fn build_api() -> Result<webrtc::api::API> {
         RTPCodecType::Audio,
     )?;
 
-    // Register video: VP8, VP9, H264 — intentionally exclude AV1
-    // webrtc-rs includes AV1 in register_default_codecs() but can't process it;
-    // Chrome picks it as preferred and on_track never fires.
+    // Video: VP8, VP9, H264 — AV1 intentionally excluded.
+    // webrtc-rs registers AV1 via register_default_codecs() but cannot demux it;
+    // Chrome picks AV1 as preferred, sends AV1 RTP, and on_track never fires.
+    // PTs match Chrome's dynamic assignments (96=VP8, 98=VP9, 102=H264).
     for (mime, pt, fmtp) in [
         ("video/VP8",  96u8, ""),
         ("video/VP9",  98,   "profile-id=0"),
         ("video/H264", 102,  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"),
+        ("video/H264", 103,  "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f"),
     ] {
         m.register_codec(
             RTCRtpCodecParameters {
                 capability: RTCRtpCodecCapability {
-                    mime_type:    mime.to_string(),
-                    clock_rate:   90000,
-                    channels:     0,
+                    mime_type:     mime.to_string(),
+                    clock_rate:    90000,
+                    channels:      0,
                     sdp_fmtp_line: fmtp.to_string(),
                     rtcp_feedback: vec![],
                 },

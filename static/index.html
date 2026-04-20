@@ -745,6 +745,7 @@
                 vid.setAttribute("autoplay", "");
                 vid.setAttribute("muted", "");
                 vid.setAttribute("playsinline", "");
+                vid.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1);";
 
                 const noCam = el("div", "no-cam hidden", { id: "local-nocam" });
                 const av = el("div", "");
