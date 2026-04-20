@@ -3,13 +3,13 @@ mod peer;
 mod room;
 mod signal;
 
+use axum::extract::ws::{Message, WebSocket};
 use axum::{
     Router,
     extract::{Path, State, WebSocketUpgrade},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
 };
-use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -24,11 +24,15 @@ use crate::{
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct RoomCreated { room_id: String }
+struct RoomCreated {
+    room_id: String,
+}
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 
-async fn index() -> Html<&'static str> { Html(INDEX_HTML) }
+async fn index() -> Html<&'static str> {
+    Html(INDEX_HTML)
+}
 
 async fn create_room(State(s): State<AppState>) -> Json<RoomCreated> {
     let id = Uuid::new_v4().to_string()[..8].to_string();
@@ -47,7 +51,7 @@ async fn ws_upgrade(
 // ── WebSocket / signaling handler ─────────────────────────────────────────────
 
 async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
-    let uid  = Uuid::new_v4().to_string()[..8].to_string();
+    let uid = Uuid::new_v4().to_string()[..8].to_string();
     let room = state.get_or_create(&room_id);
 
     let (mut ws_sink, mut ws_stream) = socket.split();
@@ -56,14 +60,21 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
     // Pump outgoing channel → WebSocket
     tokio::spawn(async move {
         while let Some(msg) = ws_rx.recv().await {
-            if ws_sink.send(Message::Text(msg.into())).await.is_err() { break; }
+            if ws_sink.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
         }
     });
 
     // Tell browser its assigned ID
-    ws_tx.send(
-        serde_json::to_string(&ServerMsg::YouAre { user_id: uid.clone() }).unwrap()
-    ).ok();
+    ws_tx
+        .send(
+            serde_json::to_string(&ServerMsg::YouAre {
+                user_id: uid.clone(),
+            })
+            .unwrap(),
+        )
+        .ok();
 
     // Wait for the browser's initial offer
     let offer_sdp = loop {
@@ -80,16 +91,21 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
     // Build server-side PeerConnection + send answer
     match setup_peer(uid.clone(), offer_sdp, room.clone(), ws_tx.clone()).await {
         Ok(answer_sdp) => {
-            ws_tx.send(
-                serde_json::to_string(&ServerMsg::Answer { sdp: answer_sdp }).unwrap()
-            ).ok();
+            ws_tx
+                .send(serde_json::to_string(&ServerMsg::Answer { sdp: answer_sdp }).unwrap())
+                .ok();
         }
-        Err(e) => { eprintln!("peer setup error for {uid}: {e:#}"); return; }
+        Err(e) => {
+            eprintln!("peer setup error for {uid}: {e:#}");
+            return;
+        }
     }
 
     // Process ICE candidates and renegotiation answers
     while let Some(Ok(Message::Text(txt))) = ws_stream.next().await {
-        let Ok(msg) = serde_json::from_str::<ClientMsg>(&txt) else { continue };
+        let Ok(msg) = serde_json::from_str::<ClientMsg>(&txt) else {
+            continue;
+        };
 
         match msg {
             ClientMsg::IceCandidate { candidate } => {
@@ -110,9 +126,10 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
     // Notify remaining peers before removing
     for entry in room.peers.iter() {
         if entry.key().as_str() != uid {
-            let msg = serde_json::to_string(
-                &ServerMsg::UserLeft { user_id: uid.clone() }
-            ).unwrap();
+            let msg = serde_json::to_string(&ServerMsg::UserLeft {
+                user_id: uid.clone(),
+            })
+            .unwrap();
             entry.value().ws_tx.send(msg).ok();
         }
     }
@@ -129,18 +146,19 @@ async fn handle_ws(socket: WebSocket, room_id: String, state: AppState) {
 #[tokio::main]
 async fn main() {
     let state = AppState::new();
-    let port  = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
 
     dashboard::spawn(state.clone(), port.clone());
 
     let app = Router::new()
-        .route("/",               get(index))
-        .route("/room/{id}",      get(index))
-        .route("/api/rooms",      post(create_room))
-        .route("/ws/{room_id}",   get(ws_upgrade))
+        .route("/", get(index))
+        .route("/room/{id}", get(index))
+        .route("/api/rooms", post(create_room))
+        .route("/ws/{room_id}", get(ws_upgrade))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await.unwrap();
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 }
